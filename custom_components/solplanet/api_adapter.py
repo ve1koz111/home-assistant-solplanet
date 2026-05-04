@@ -58,7 +58,12 @@ class SolplanetApiAdapter:
 
         """
         version = await cls._detect_protocol_version(client)
-        _LOGGER.info("Detected Solplanet protocol version: %s", version)
+        _LOGGER.info(
+            "Detected Solplanet protocol version: %s (scheme=%s port=%s)",
+            version,
+            client.scheme,
+            client.port,
+        )
 
         if version == "v2":
             api = SolplanetApiV2(client)
@@ -73,7 +78,8 @@ class SolplanetApiAdapter:
     ) -> Literal["v1", "v2"]:
         """Detect which protocol version the inverter supports.
 
-        Tries V2 endpoint first, falls back to V1 if V2 fails.
+        Tries multiple scheme/port combinations for V2 and V1 and verifies the
+        endpoint by performing a full `get_inverter_info()` request.
 
         Args:
             client: HTTP client instance
@@ -81,40 +87,63 @@ class SolplanetApiAdapter:
         Returns:
             "v2" if V2 protocol is supported, "v1" otherwise
 
+        Raises:
+            RuntimeError: If no supported protocol can be detected
+
         """
 
-        # API version configurations: (version_name, endpoint, scheme, port)
-        api_configs = [
-            ("v2", "getdev.cgi?device=2", "https", 443),
-            ("v2", "getdev.cgi?device=2", "http", 8484),
-            ("v1", "invinfo.cgi", "http", 8484),
+        # Ordered by most common observed configurations first.
+        api_configs: list[tuple[Literal["v1", "v2"], str, int]] = [
+            ("v2", "https", 443),
+            ("v2", "http", 8484),
+            ("v2", "https", 8484),
+            ("v2", "http", 80),
+            ("v1", "http", 8484),
+            ("v1", "http", 80),
+            ("v1", "https", 443),
+            ("v1", "https", 8484),
         ]
 
-        for version, endpoint, scheme, port in api_configs:
+        for version, scheme, port in api_configs:
             client.scheme = scheme
             client.port = port
+            api = SolplanetApiV2(client) if version == "v2" else SolplanetApiV1(client)
             try:
-                _LOGGER.debug("Attempting to detect %s protocol using %s and port %s...",
+                _LOGGER.debug(
+                    "Attempting %s protocol detection using %s and port %s",
                     version,
                     scheme,
                     port,
                 )
-                await client.get(endpoint)
-                _LOGGER.debug("%s protocol detected successfully using %s and port %s",
+                info = await api.get_inverter_info()
+                if getattr(info, "inv", None):
+                    _LOGGER.debug(
+                        "%s protocol detected successfully using %s and port %s",
+                        version,
+                        scheme,
+                        port,
+                    )
+                    return version
+
+                _LOGGER.debug(
+                    "%s protocol probe using %s and port %s returned empty inverter list",
                     version,
                     scheme,
                     port,
                 )
-                return version
-            except Exception as e:
-                _LOGGER.debug("%s protocol detection failed using %s and port %s: %s",
+            except Exception as err:
+                _LOGGER.debug(
+                    "%s protocol detection failed using %s and port %s: %s",
                     version,
                     scheme,
                     port,
-                    e
+                    err,
                 )
 
-        raise RuntimeError("Failed to detect any supported protocol version")
+        raise RuntimeError(
+            "Failed to detect any supported protocol version across known "
+            "scheme/port combinations"
+        )
 
     @property
     def version(self) -> Literal["v1", "v2"]:
@@ -282,19 +311,42 @@ class SolplanetApiAdapter:
             raise NotImplementedError("Battery operations are not supported in V1 protocol")
         await self._api.set_schedule_slots(schedule)
 
-    async def get_submeter_data(self) -> GetMeterDataResponse:
-        """Get submeter data.
+    async def set_schedule_slot(
+        self,
+        slot_id: int,
+        start_hour: int,
+        start_minute: int,
+        end_hour: int,
+        end_minute: int,
+        power: int,
+        enabled: bool,
+    ) -> None:
+        """Set battery schedule slot.
 
-        Returns:
-            GetMeterDataResponse: Meter data
+        Raises:
+            NotImplementedError: If battery operations are not supported (V1 protocol)
+        """
+        if not self._supports_battery_operations():
+            raise NotImplementedError("Battery operations are not supported in V1 protocol")
+        await self._api.set_schedule_slot(
+            slot_id,
+            start_hour,
+            start_minute,
+            end_hour,
+            end_minute,
+            power,
+            enabled,
+        )
+
+    async def get_submeter_data(self) -> GetMeterDataResponse:
+        """Get submeter data (V2 only).
+
+        Raises:
+            NotImplementedError: If submeters are not supported (V1 protocol)
         """
         if not self._version == "v2":
             raise NotImplementedError("Submeters are not supported in V1 protocol")
         return await self._api.get_submeter_data()
-
-    # ========================================================================
-    # Modbus methods (delegated to underlying API)
-    # ========================================================================
 
     async def modbus_read_holding_registers(
         self,
@@ -303,7 +355,7 @@ class SolplanetApiAdapter:
         register_address: int,
         register_count: int = 1,
     ) -> dict | int | str | None:
-        """Read modbus holding registers."""
+        """Read modbus holding register."""
         return await self._api.modbus_read_holding_registers(
             data_type, device_address, register_address, register_count
         )
@@ -316,7 +368,7 @@ class SolplanetApiAdapter:
         value: int,
         dry_run: bool = False,
     ) -> dict | int | str | None:
-        """Write modbus single holding register."""
+        """Write modbus holding register."""
         return await self._api.modbus_write_single_holding_register(
             data_type, device_address, register_address, value, dry_run
         )
@@ -328,7 +380,7 @@ class SolplanetApiAdapter:
         register_address: int,
         register_count: int = 1,
     ) -> dict | int | str | None:
-        """Read modbus input registers."""
+        """Read modbus input register."""
         return await self._api.modbus_read_input_registers(
             data_type, device_address, register_address, register_count
         )

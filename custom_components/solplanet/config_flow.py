@@ -39,10 +39,9 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
     """
 
     client = SolplanetClient(data[CONF_HOST], async_get_clientsession(hass))
-    api = await SolplanetApiAdapter.create(client)
-    _LOGGER.info("Detected Solplanet protocol version: %s", api.version)
-
     try:
+        api = await SolplanetApiAdapter.create(client)
+        _LOGGER.info("Detected Solplanet protocol version: %s", api.version)
         await api.get_inverter_info()
     except Exception as err:
         _LOGGER.debug("Exception occurred during adding device", exc_info=err)
