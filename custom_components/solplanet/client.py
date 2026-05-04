@@ -17,6 +17,7 @@ import time
 from dataclasses import asdict, is_dataclass, dataclass
 from inspect import signature
 from typing import Any
+from urllib.parse import urlsplit
 
 from aiohttp import ClientError, ClientResponse, ClientSession, ClientTimeout
 
@@ -51,9 +52,15 @@ class SolplanetClient:
         `request_timeout` and `request_retries` are tuned for embedded inverter dongles that
         can be slow to respond and may temporarily refuse concurrent connections.
         """
-        self.host = host
-        self.scheme = scheme
-        self.port = port
+        # Accept either raw host/IP (e.g. 192.168.1.10) or full URL-like input
+        # (e.g. https://192.168.1.10/getdev.cgi?device=2) from config flow.
+        raw_host = host.strip()
+        parsed = urlsplit(raw_host if "://" in raw_host else f"//{raw_host}")
+
+        normalized_host = parsed.hostname or raw_host
+        self.host = normalized_host.strip("/")
+        self.scheme = parsed.scheme if parsed.scheme in {"http", "https"} else scheme
+        self.port = parsed.port if parsed.port is not None else port
         self.session = session
         self.request_timeout = request_timeout
         self.request_retries = request_retries

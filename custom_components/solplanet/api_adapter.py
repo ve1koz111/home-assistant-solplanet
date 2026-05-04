@@ -95,12 +95,14 @@ class SolplanetApiAdapter:
         # Ordered by most common observed configurations first.
         api_configs: list[tuple[Literal["v1", "v2"], str, int]] = [
             ("v2", "https", 443),
+            ("v2", "http", 443),
             ("v2", "http", 8484),
             ("v2", "https", 8484),
             ("v2", "http", 80),
             ("v1", "http", 8484),
             ("v1", "http", 80),
             ("v1", "https", 443),
+            ("v1", "http", 443),
             ("v1", "https", 8484),
         ]
 
@@ -115,22 +117,14 @@ class SolplanetApiAdapter:
                     scheme,
                     port,
                 )
-                info = await api.get_inverter_info()
-                if getattr(info, "inv", None):
-                    _LOGGER.debug(
-                        "%s protocol detected successfully using %s and port %s",
-                        version,
-                        scheme,
-                        port,
-                    )
-                    return version
-
+                await api.get_inverter_info()
                 _LOGGER.debug(
-                    "%s protocol probe using %s and port %s returned empty inverter list",
+                    "%s protocol detected successfully using %s and port %s",
                     version,
                     scheme,
                     port,
                 )
+                return version
             except Exception as err:
                 _LOGGER.debug(
                     "%s protocol detection failed using %s and port %s: %s",
